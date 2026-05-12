@@ -240,8 +240,6 @@ sequenceDiagram
 
 ### Muhammad Azka Awliya - 2406431510 - Lelang dan Penawaran
 
-## Individual Works
-
 ### Individual Container Diagram - Bidding Command Service
 
 ```mermaid
