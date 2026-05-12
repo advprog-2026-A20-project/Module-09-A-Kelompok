@@ -14,26 +14,16 @@
 
 ### 1.1 System Context Diagram
 ```mermaid
-graph LR
-    U[User Browser]
-    FE[BidMart Frontend]
-    GW[BidMart Gateway]
-    AUTH[Auth Service]
-    LQS[Listing Query Service]
-    AQS[Auction Query Service]
-    BCS[Bidding Command Service]
-    WLT[Wallet Service]
-    NTF[Notification Service]
+flowchart TB
+    U["User Browser"] --> FE["BidMart Frontend"]
+    FE --> GW["BidMart Gateway"]
 
-    U --> FE
-    FE --> GW
-
-    GW --> AUTH
-    GW --> LQS
-    GW --> AQS
-    GW --> BCS
-    GW --> WLT
-    GW --> NTF
+    GW --> AUTH["Auth Service"]
+    GW --> LQS["Listing Query Service"]
+    GW --> AQS["Auction Query Service"]
+    GW --> BCS["Bidding Command Service"]
+    GW --> WLT["Wallet Service"]
+    GW --> NTF["Notification Service"]
 
     BCS --> WLT
     BCS --> AQS
