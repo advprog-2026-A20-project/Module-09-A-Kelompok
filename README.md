@@ -498,3 +498,274 @@ sequenceDiagram
     AuctionCommandController-->>Gateway: 200 OK
     Gateway-->>Client: auction cancelled
 ```
+
+### Refki Septian - 2406397196 - Wallet Service
+
+### Individual Container Diagram - Wallet Service
+
+```mermaid
+flowchart TB
+    User["BidMart User"]
+    Frontend["BidMart Frontend"]
+    Gateway["BidMart Gateway"]
+    BiddingService["Bidding Command Service"]
+    
+    WalletService["Wallet Service<br/>Spring Boot Service<br/>Port 8084"]
+    WalletStorage[("Wallet Storage<br/>Wallet, Hold, Transaction Data")]
+    
+    User -->|"Manage wallet, top-up, withdraw, check balance"| Frontend
+    Frontend -->|"HTTP request"| Gateway
+    
+    Gateway -->|"GET /wallets/{userId}/balance"| WalletService
+    Gateway -->|"POST /wallets/{userId}/top-up"| WalletService
+    Gateway -->|"POST /wallets/{userId}/withdraw"| WalletService
+    Gateway -->|"GET /wallets/{userId}/transactions"| WalletService
+    
+    BiddingService -->|"POST /wallets/{userId}/holds"| WalletService
+    BiddingService -->|"POST /wallets/{userId}/holds/{holdId}/release"| WalletService
+    BiddingService -->|"POST /wallets/{userId}/holds/{holdId}/capture"| WalletService
+    
+    WalletService -->|"Read/write wallet state"| WalletStorage
+```
+
+---
+
+### Code Diagram 1 - Wallet Service Class Structure
+
+```mermaid
+classDiagram
+    class WalletController {
+        -WalletService walletService
+        +getBalance(UUID userId) WalletBalanceResponse
+        +topUp(UUID userId, AmountRequest request) WalletBalanceResponse
+        +withdraw(UUID userId, AmountRequest request) WalletBalanceResponse
+        +hold(UUID userId, AmountRequest request) HoldResponse
+        +release(UUID userId, UUID holdId, String idempotencyKey) HoldResponse
+        +capture(UUID userId, UUID holdId, String idempotencyKey) HoldResponse
+        +transactions(UUID userId) List~WalletTransaction~
+    }
+
+    class WalletService {
+        -WalletRepository walletRepository
+        -HoldRepository holdRepository
+        -TransactionRepository transactionRepository
+        -Map idempotencyCache
+        +getBalance(UUID userId) WalletBalanceResponse
+        +topUp(UUID userId, BigDecimal amount) WalletBalanceResponse
+        +withdraw(UUID userId, BigDecimal amount) WalletBalanceResponse
+        +hold(UUID userId, BigDecimal amount, String idempotencyKey) HoldRecord
+        +release(UUID userId, UUID holdId, String idempotencyKey) HoldRecord
+        +capture(UUID userId, UUID holdId, String idempotencyKey) HoldRecord
+        +getTransactions(UUID userId) List~WalletTransaction~
+    }
+
+    class WalletRepository {
+        +findOrCreateByUserId(UUID userId) Wallet
+    }
+
+    class HoldRepository {
+        +save(HoldRecord holdRecord) HoldRecord
+        +findById(UUID holdId) Optional~HoldRecord~
+    }
+
+    class TransactionRepository {
+        +add(WalletTransaction transaction)
+        +findByUserId(UUID userId) List~WalletTransaction~
+    }
+
+    class Wallet {
+        -UUID userId
+        -BigDecimal availableBalance
+        -BigDecimal heldBalance
+        +topUp(BigDecimal amount)
+        +withdraw(BigDecimal amount)
+        +hold(BigDecimal amount)
+        +release(BigDecimal amount)
+        +capture(BigDecimal amount)
+    }
+
+    class HoldRecord {
+        -UUID holdId
+        -UUID userId
+        -BigDecimal amount
+        -HoldStatus status
+        -Instant createdAt
+        +markReleased()
+        +markCaptured()
+    }
+
+    class WalletTransaction {
+        -UUID userId
+        -String type
+        -BigDecimal amount
+        -String reference
+    }
+
+    class AmountRequest {
+        +BigDecimal amount
+        +String idempotencyKey
+    }
+
+    class WalletBalanceResponse {
+        +UUID userId
+        +BigDecimal availableBalance
+        +BigDecimal heldBalance
+    }
+
+    class HoldResponse {
+        +UUID holdId
+        +UUID userId
+        +BigDecimal amount
+        +String status
+    }
+
+    WalletController --> WalletService
+    WalletController --> AmountRequest
+    WalletController --> WalletBalanceResponse
+    WalletController --> HoldResponse
+
+    WalletService --> WalletRepository
+    WalletService --> HoldRepository
+    WalletService --> TransactionRepository
+    WalletService --> Wallet
+    WalletService --> HoldRecord
+    WalletService --> WalletTransaction
+
+    WalletRepository --> Wallet
+    HoldRepository --> HoldRecord
+    TransactionRepository --> WalletTransaction
+```
+
+Diagram ini menunjukkan struktur utama kode Wallet Service. `WalletController` menjadi REST API layer yang menerima request dari Gateway atau service lain. Controller tidak menyimpan business logic utama, tetapi meneruskan request ke `WalletService`.
+
+`WalletService` menjadi pusat business logic. Di dalam service ini terdapat proses untuk melihat saldo, top-up, withdraw, hold fund, release hold, capture hold, dan mengambil riwayat transaksi. Service ini juga menggunakan `idempotencyCache` untuk menghindari pemrosesan command yang sama secara berulang, terutama pada operasi hold, release, dan capture.
+
+Repository layer digunakan untuk memisahkan akses data dari business logic. `WalletRepository` digunakan untuk mengambil atau membuat data wallet berdasarkan `userId`. `HoldRepository` digunakan untuk menyimpan dan mencari data dana yang sedang ditahan. `TransactionRepository` digunakan untuk mencatat dan mengambil riwayat transaksi wallet.
+
+Model utama dalam service ini adalah `Wallet`, `HoldRecord`, dan `WalletTransaction`. `Wallet` menyimpan saldo tersedia dan saldo tertahan. `HoldRecord` menyimpan status dana yang ditahan, seperti `HELD`, `RELEASED`, atau `CAPTURED`. `WalletTransaction` menyimpan jejak transaksi agar perubahan saldo dapat diaudit.
+
+---
+
+### Code Diagram 2 - Hold Fund Flow
+
+```mermaid
+sequenceDiagram
+    participant Bidding as Bidding Command Service
+    participant Controller as WalletController
+    participant Service as WalletService
+    participant WalletRepo as WalletRepository
+    participant HoldRepo as HoldRepository
+    participant TxRepo as TransactionRepository
+
+    Bidding->>Controller: POST /wallets/{userId}/holds
+    Controller->>Service: hold(userId, amount, idempotencyKey)
+
+    alt idempotencyKey already exists
+        Service-->>Controller: return existing HoldRecord
+        Controller-->>Bidding: HoldResponse
+    else new hold request
+        Service->>WalletRepo: findOrCreateByUserId(userId)
+        WalletRepo-->>Service: Wallet
+
+        Service->>Service: validate availableBalance >= amount
+        Service->>Service: wallet.hold(amount)
+
+        Service->>HoldRepo: save(new HoldRecord)
+        HoldRepo-->>Service: HoldRecord
+
+        Service->>TxRepo: add(WalletTransaction type HOLD)
+        Service->>Service: store idempotencyKey result
+
+        Service-->>Controller: HoldRecord
+        Controller-->>Bidding: HoldResponse
+    end
+```
+
+Diagram ini menjelaskan alur ketika Bidding Command Service meminta Wallet Service untuk menahan dana user saat user melakukan bid. Request masuk ke `WalletController`, lalu diteruskan ke `WalletService`.
+
+Pada tahap awal, `WalletService` mengecek apakah `idempotencyKey` sudah pernah diproses. Jika key yang sama sudah ada, service langsung mengembalikan hasil lama. Tujuannya adalah mencegah dana user tertahan dua kali ketika request yang sama dikirim ulang karena retry jaringan.
+
+Jika request merupakan request baru, service mengambil wallet user melalui `WalletRepository`, lalu memvalidasi apakah `availableBalance` cukup. Jika saldo cukup, method `wallet.hold(amount)` dijalankan. Operasi ini mengurangi `availableBalance` dan menambah `heldBalance`.
+
+Setelah itu, service membuat `HoldRecord`, mencatat transaksi bertipe `HOLD`, lalu menyimpan hasilnya ke idempotency cache. Alur ini penting karena proses bidding tidak boleh hanya mengecek saldo, tetapi juga harus memastikan dana benar-benar ditahan agar user tidak menggunakan saldo yang sama untuk transaksi lain.
+
+---
+
+### Code Diagram 3 - Release Hold Flow
+
+```mermaid
+sequenceDiagram
+    participant Bidding as Bidding Command Service
+    participant Controller as WalletController
+    participant Service as WalletService
+    participant WalletRepo as WalletRepository
+    participant HoldRepo as HoldRepository
+    participant TxRepo as TransactionRepository
+
+    Bidding->>Controller: POST /wallets/{userId}/holds/{holdId}/release
+    Controller->>Service: release(userId, holdId, idempotencyKey)
+
+    alt idempotencyKey already exists
+        Service-->>Controller: return existing HoldRecord
+        Controller-->>Bidding: HoldResponse
+    else new release request
+        Service->>HoldRepo: findById(holdId)
+        HoldRepo-->>Service: HoldRecord
+
+        Service->>Service: validate hold ownership
+        Service->>Service: check status == HELD
+
+        Service->>WalletRepo: findOrCreateByUserId(userId)
+        WalletRepo-->>Service: Wallet
+
+        Service->>Service: wallet.release(amount)
+        Service->>Service: holdRecord.markReleased()
+        Service->>TxRepo: add(WalletTransaction type RELEASE)
+        Service->>Service: store idempotencyKey result
+
+        Service-->>Controller: HoldRecord
+        Controller-->>Bidding: HoldResponse
+    end
+```
+
+
+---
+
+### Code Diagram 4 - Capture Hold Flow
+
+```mermaid
+sequenceDiagram
+    participant Bidding as Bidding Command Service
+    participant Controller as WalletController
+    participant Service as WalletService
+    participant WalletRepo as WalletRepository
+    participant HoldRepo as HoldRepository
+    participant TxRepo as TransactionRepository
+
+    Bidding->>Controller: POST /wallets/{userId}/holds/{holdId}/capture
+    Controller->>Service: capture(userId, holdId, idempotencyKey)
+
+    alt idempotencyKey already exists
+        Service-->>Controller: return existing HoldRecord
+        Controller-->>Bidding: HoldResponse
+    else new capture request
+        Service->>HoldRepo: findById(holdId)
+        HoldRepo-->>Service: HoldRecord
+
+        Service->>Service: validate hold ownership
+        Service->>Service: check status == HELD
+
+        Service->>WalletRepo: findOrCreateByUserId(userId)
+        WalletRepo-->>Service: Wallet
+
+        Service->>Service: wallet.capture(amount)
+        Service->>Service: holdRecord.markCaptured()
+        Service->>TxRepo: add(WalletTransaction type CAPTURE)
+        Service->>Service: store idempotencyKey result
+
+        Service-->>Controller: HoldRecord
+        Controller-->>Bidding: HoldResponse
+    end
+```
+
+---
