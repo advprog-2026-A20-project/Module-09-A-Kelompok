@@ -1,4 +1,4 @@
-# Advanced Programming A12 - BidMart
+# Advanced Programming A20 - BidMart
 
 ## Group Software Architecture - Tutorial 09 - B
 
@@ -236,4 +236,267 @@ sequenceDiagram
     InternalAuthController->>UserRepository: findById(id)
     UserRepository-->>InternalAuthController: User(role)
     InternalAuthController-->>Gateway: PermissionResponse
+```
+
+### Muhammad Azka Awliya - 2406431510 - Lelang dan Penawaran
+
+## Individual Works
+
+### Individual Container Diagram - Bidding Command Service
+
+```mermaid
+flowchart LR
+    Client[Client / Frontend]
+    Gateway[API Gateway]
+
+    subgraph BiddingCommandService[bidmart-bidding-command-service]
+        BidController[BidController]
+        AuctionCommandController[AuctionCommandController]
+
+        BidCommandService[BidCommandService]
+        AuctionLifecycleService[AuctionLifecycleService]
+
+        BidValidator[BidValidator]
+        AntiSnipingPolicy[AntiSnipingPolicy]
+        WinnerDeterminationService[WinnerDeterminationService]
+
+        AuctionRepository[AuctionRepository]
+        BidRepository[BidRepository]
+
+        WalletClient[WalletClient]
+        ListingClient[ListingClient]
+        AuthClient[AuthClient]
+
+        EventPublisher[EventPublisher / OutboxPublisher]
+
+        CommandDB[(Command Database)]
+    end
+
+    AuthService[Auth / User Service]
+    ListingService[Listing Service]
+    WalletService[Wallet Service]
+    MessageBroker[(Message Broker)]
+    AuctionQueryService[Auction Query Service]
+
+    Client --> Gateway
+    Gateway --> BidController
+    Gateway --> AuctionCommandController
+
+    BidController --> BidCommandService
+    AuctionCommandController --> AuctionLifecycleService
+
+    BidCommandService --> AuthClient
+    BidCommandService --> ListingClient
+    BidCommandService --> WalletClient
+    BidCommandService --> BidValidator
+    BidCommandService --> AntiSnipingPolicy
+    BidCommandService --> AuctionRepository
+    BidCommandService --> BidRepository
+    BidCommandService --> EventPublisher
+
+    AuctionLifecycleService --> AuthClient
+    AuctionLifecycleService --> WinnerDeterminationService
+    AuctionLifecycleService --> AuctionRepository
+    AuctionLifecycleService --> BidRepository
+    AuctionLifecycleService --> WalletClient
+    AuctionLifecycleService --> EventPublisher
+
+    AuthClient --> AuthService
+    ListingClient --> ListingService
+    WalletClient --> WalletService
+
+    AuctionRepository --> CommandDB
+    BidRepository --> CommandDB
+
+    EventPublisher --> MessageBroker
+    MessageBroker --> AuctionQueryService
+```
+
+### Code Diagram 1 - Place Bid / Membuat Penawaran
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+    participant BidController
+    participant BidCommandService
+    participant AuthClient
+    participant ListingClient
+    participant WalletClient
+    participant AuctionRepository
+    participant BidRepository
+    participant EventPublisher
+
+    Client->>Gateway: POST /api/auctions/{auctionId}/bids
+    Gateway->>BidController: forward bid command
+    BidController->>BidCommandService: placeBid(auctionId, bidderId, amount)
+
+    BidCommandService->>AuthClient: validateToken(token)
+    AuthClient-->>BidCommandService: authenticated user
+
+    BidCommandService->>ListingClient: getListingSnapshot(listingId)
+    ListingClient-->>BidCommandService: listing snapshot
+
+    BidCommandService->>AuctionRepository: findById(auctionId)
+    AuctionRepository-->>BidCommandService: Auction
+
+    BidCommandService->>BidCommandService: validate auction status
+    BidCommandService->>BidCommandService: validate minimum increment
+    BidCommandService->>BidCommandService: validate bidder eligibility
+
+    BidCommandService->>WalletClient: holdFund(bidderId, amount)
+    WalletClient-->>BidCommandService: hold success
+
+    BidCommandService->>BidRepository: save(Bid)
+    BidRepository-->>BidCommandService: saved bid
+
+    BidCommandService->>AuctionRepository: update currentPrice + leader
+    AuctionRepository-->>BidCommandService: updated auction
+
+    BidCommandService->>EventPublisher: publish BidPlaced
+    EventPublisher-->>BidCommandService: event published
+
+    BidCommandService-->>BidController: BidResponse
+    BidController-->>Gateway: 201 Created
+    Gateway-->>Client: bid accepted
+```
+
+### Code Diagram 2 - Anti-Sniping Extension
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+    participant BidController
+    participant BidCommandService
+    participant AuctionRepository
+    participant WalletClient
+    participant BidRepository
+    participant EventPublisher
+
+    Client->>Gateway: POST /api/auctions/{auctionId}/bids
+    Gateway->>BidController: forward bid command
+    BidController->>BidCommandService: placeBid(command)
+
+    BidCommandService->>AuctionRepository: findById(auctionId)
+    AuctionRepository-->>BidCommandService: Auction
+
+    BidCommandService->>BidCommandService: validate bid amount
+    BidCommandService->>WalletClient: holdFund(bidderId, amount)
+    WalletClient-->>BidCommandService: hold success
+
+    BidCommandService->>BidRepository: save(Bid)
+    BidRepository-->>BidCommandService: saved bid
+
+    BidCommandService->>BidCommandService: check remaining auction time
+
+    alt bid placed near auction end
+        BidCommandService->>AuctionRepository: extendAuctionEndTime(auctionId)
+        AuctionRepository-->>BidCommandService: updated endsAt
+        BidCommandService->>EventPublisher: publish AuctionExtended
+    else bid not near auction end
+        BidCommandService->>BidCommandService: keep original endsAt
+    end
+
+    BidCommandService->>EventPublisher: publish BidPlaced
+    BidCommandService-->>BidController: BidResponse
+    BidController-->>Gateway: 201 Created
+    Gateway-->>Client: bid accepted
+```
+
+
+### Code Diagram 3 - Close Auction dan Menentukan Pemenang
+
+```mermaid
+sequenceDiagram
+    participant Scheduler
+    participant Gateway
+    participant AuctionCommandController
+    participant AuctionLifecycleService
+    participant AuthClient
+    participant AuctionRepository
+    participant BidRepository
+    participant WalletClient
+    participant EventPublisher
+
+    Scheduler->>Gateway: POST /api/auctions/{auctionId}/close
+    Gateway->>AuctionCommandController: forward close command
+    AuctionCommandController->>AuctionLifecycleService: closeAuction(auctionId)
+
+    AuctionLifecycleService->>AuthClient: validatePermission(token)
+    AuthClient-->>AuctionLifecycleService: authorized
+
+    AuctionLifecycleService->>AuctionRepository: findById(auctionId)
+    AuctionRepository-->>AuctionLifecycleService: Auction
+
+    AuctionLifecycleService->>BidRepository: findHighestBidByAuctionId(auctionId)
+    BidRepository-->>AuctionLifecycleService: highestBid
+
+    AuctionLifecycleService->>AuctionLifecycleService: close auction
+
+    alt highest bid exists and reserve price is met
+        AuctionLifecycleService->>WalletClient: captureHold(winnerId, winningAmount)
+        WalletClient-->>AuctionLifecycleService: capture success
+        AuctionLifecycleService->>WalletClient: releaseOtherHolds(auctionId)
+        WalletClient-->>AuctionLifecycleService: release success
+        AuctionLifecycleService->>EventPublisher: publish WinnerDetermined
+    else no winner or reserve price not met
+        AuctionLifecycleService->>WalletClient: releaseAllHolds(auctionId)
+        WalletClient-->>AuctionLifecycleService: release success
+        AuctionLifecycleService->>EventPublisher: publish AuctionUnsold
+    end
+
+    AuctionLifecycleService->>AuctionRepository: save closed auction
+    AuctionRepository-->>AuctionLifecycleService: saved auction
+
+    AuctionLifecycleService->>EventPublisher: publish AuctionClosed
+    EventPublisher-->>AuctionLifecycleService: events published
+
+    AuctionLifecycleService-->>AuctionCommandController: CloseAuctionResponse
+    AuctionCommandController-->>Gateway: 200 OK
+    Gateway-->>Scheduler: auction closed
+```
+
+### Code Diagram 4 - Cancel Auction
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+    participant AuctionCommandController
+    participant AuctionLifecycleService
+    participant AuthClient
+    participant AuctionRepository
+    participant BidRepository
+    participant WalletClient
+    participant EventPublisher
+
+    Client->>Gateway: POST /api/auctions/{auctionId}/cancel
+    Gateway->>AuctionCommandController: forward cancel command
+    AuctionCommandController->>AuctionLifecycleService: cancelAuction(auctionId, reason)
+
+    AuctionLifecycleService->>AuthClient: validatePermission(token)
+    AuthClient-->>AuctionLifecycleService: authorized
+
+    AuctionLifecycleService->>AuctionRepository: findById(auctionId)
+    AuctionRepository-->>AuctionLifecycleService: Auction
+
+    AuctionLifecycleService->>BidRepository: findActiveBidsByAuctionId(auctionId)
+    BidRepository-->>AuctionLifecycleService: active bids
+
+    AuctionLifecycleService->>AuctionLifecycleService: validate auction can be cancelled
+    AuctionLifecycleService->>AuctionLifecycleService: mark auction as cancelled
+
+    AuctionLifecycleService->>WalletClient: releaseAllHolds(auctionId)
+    WalletClient-->>AuctionLifecycleService: release success
+
+    AuctionLifecycleService->>AuctionRepository: save cancelled auction
+    AuctionRepository-->>AuctionLifecycleService: saved auction
+
+    AuctionLifecycleService->>EventPublisher: publish AuctionCancelled
+    EventPublisher-->>AuctionLifecycleService: event published
+
+    AuctionLifecycleService-->>AuctionCommandController: CancelAuctionResponse
+    AuctionCommandController-->>Gateway: 200 OK
+    Gateway-->>Client: auction cancelled
 ```
