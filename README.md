@@ -754,3 +754,361 @@ sequenceDiagram
 ```
 
 ---
+### Daffa Abhinaya Avesinanoor - 2406405720 - Katalog dan Manajemen Listing
+
+
+### Individual Container Diagram - Katalog dan Manajemen Listing
+```mermaid
+flowchart LR
+    Buyer[Buyer Browser]
+    Seller[Seller Browser]
+
+    Buyer --> FE[BidMart Frontend]
+    Seller --> FE
+    FE -->|HTTP API| GW[BidMart Gateway]
+
+    subgraph BidMartSystem[BidMart System]
+        GW
+        LQS[Listing Query Service<br/>Spring Boot read-side]
+        LCM[Legacy Listing Command Module<br/>inside Bidmart Backend/Gateway]
+        BCS[Bidding Command Service<br/>auction and bid commands]
+        AQS[Auction Query Service<br/>auction read model]
+        AUTH[Auth Service<br/>identity and role]
+        BUS[(Event Bus / Price Update Queue)]
+        LDB[(Listing Read DB<br/>PostgreSQL schema)]
+        CDB[(Listing and Auction Command DB<br/>PostgreSQL schema)]
+    end
+
+    GW -->|GET /api/listings, detail, categories| LQS
+    GW -->|POST/PUT/DELETE /api/listings fallback| LCM
+    GW -->|POST /api/auctions create auction listing| BCS
+    GW -->|validate token and role| AUTH
+
+    LQS -->|read listing, auction, bid projection| LDB
+    LCM -->|persist listing command state| CDB
+    BCS -->|synchronous listing validation| LCM
+    BCS -->|BidPlaced / latest price event| BUS
+    BUS -->|project latest displayed price| LCM
+    AQS -->|auction status and timing by listingId| LDB
+```
+
+### Component Diagram 1 - Listing Command Components
+```mermaid
+flowchart LR
+    GW[BidMart Gateway]
+    BCS[Bidding Command Service]
+
+    subgraph LegacyBackend[Legacy Bidmart Backend / Listing Command Container]
+        LC[ListingController<br/>public listing command and validation API]
+        AC[AuctionController<br/>create auction listing entry point]
+        LS[ListingService<br/>listing command rules]
+        AS[AuctionService<br/>auction creation and bid orchestration]
+        PUQ[InMemoryListingPriceUpdateQueue<br/>async latest price projection]
+        CAT[ListingCategory Tree Builder]
+        LR[ListingRepository]
+        UR[UserRepository]
+        AR[AuctionRepository]
+        BR[BidRepository]
+        DTO[Listing DTO Mapper]
+    end
+
+    GW -->|POST/PUT/DELETE /api/listings| LC
+    GW -->|POST /api/auctions| AC
+    BCS -->|GET /api/listings/{id}/validation| LC
+
+    LC --> LS
+    AC --> AS
+    AS -->|createAuctionListing| LS
+    AS -->|publish ListingPriceUpdateMessage| PUQ
+    PUQ -->|updateDisplayedPrice| LS
+
+    LS --> LR
+    LS --> UR
+    LS --> AR
+    LS --> BR
+    LS --> DTO
+    CAT --> DTO
+
+    LR --> CDB[(Command Database)]
+    UR --> CDB
+    AR --> CDB
+    BR --> CDB
+```
+
+### Component Diagram 2 - Listing Query Components
+```mermaid
+flowchart LR
+    GW[BidMart Gateway]
+
+    subgraph ListingQueryServiceContainer[bidmart-listing-query-service]
+        LQC[ListingQueryController<br/>GET catalog, detail, categories]
+        LQSVC[ListingQueryService<br/>read use cases]
+        SPEC[Specification Filters<br/>status, category, keyword, price]
+        WINDOW[Auction Window Filter<br/>endingAfter / endingBefore]
+        MAP[Listing Response Mapper]
+        TREE[Category Tree Builder]
+        LR[ListingRepository]
+        AR[AuctionRepository]
+        BR[BidRepository]
+    end
+
+    GW -->|GET /api/listings| LQC
+    LQC --> LQSVC
+    LQSVC --> SPEC
+    LQSVC --> WINDOW
+    LQSVC --> MAP
+    LQSVC --> TREE
+    SPEC --> LR
+    WINDOW --> AR
+    MAP --> LR
+    MAP --> AR
+    MAP --> BR
+
+    LR --> LDB[(Listing Read DB)]
+    AR --> LDB
+    BR --> LDB
+```
+
+### Code Diagram 1 - Listing Command Model
+```mermaid
+classDiagram
+    class ListingController {
+        +create(request, authenticatedUser)
+        +update(listingId, request, authenticatedUser)
+        +cancel(listingId, authenticatedUser)
+        +validateForBid(listingId)
+    }
+
+    class ListingService {
+        +createListing(request, sellerId)
+        +updateListing(listingId, request, sellerId)
+        +cancelListing(listingId, sellerId)
+        +validateListingForBid(listingId)
+        +createAuctionListing(title, description, imageUrl, startingPrice, category, seller, createdAt)
+        +updateDisplayedPrice(listingId, latestPrice)
+    }
+
+    class ListingRepository {
+        +findAllByStatus(status, pageable)
+        +findByIdAndStatus(id, status)
+        +countBySellerIdAndStatus(sellerId, status)
+    }
+
+    class BidRepository {
+        +existsByListingId(listingId)
+        +countByAuctionId(auctionId)
+    }
+
+    class AuctionRepository {
+        +findByListingId(listingId)
+        +countByListingSellerIdAndStatusIn(sellerId, statuses)
+    }
+
+    class UserRepository {
+        +findById(userId)
+    }
+
+    class Listing {
+        UUID id
+        String title
+        String description
+        String imageUrl
+        BigDecimal price
+        ListingCategory category
+        ListingStatus status
+        Instant createdAt
+        Instant updatedAt
+        Instant cancelledAt
+    }
+
+    class User {
+        UUID id
+        String email
+        Role role
+    }
+
+    class ListingStatus {
+        <<enumeration>>
+        ACTIVE
+        CANCELLED
+    }
+
+    class ListingCategory {
+        <<enumeration>>
+    }
+
+    ListingController --> ListingService : delegates commands
+    ListingService --> ListingRepository : persists listing
+    ListingService --> UserRepository : loads seller
+    ListingService --> BidRepository : checks existing bids
+    ListingService --> AuctionRepository : reads/closes related auction
+    ListingRepository --> Listing : manages
+    Listing --> User : seller
+    Listing --> ListingStatus
+    Listing --> ListingCategory
+```
+
+### Code Diagram 2 - Catalog Query Read Model
+```mermaid
+classDiagram
+    class ListingQueryController {
+        +list(pageable, category, keyword, minPrice, maxPrice, endingAfter, endingBefore)
+        +getById(listingId)
+        +categories()
+        +categoryTree()
+    }
+
+    class ListingQueryService {
+        +getAllListings(pageable, category, keyword, minPrice, maxPrice, endingAfter, endingBefore)
+        +getListingDetail(listingId)
+        +getCategories()
+        +getCategoryTree()
+        -matchesAuctionWindow(listingId, endingAfter, endingBefore)
+        -toSummaryResponse(listing)
+        -toDetailResponse(listing)
+    }
+
+    class ListingRepository {
+        +findAll(specification, sort)
+        +findById(listingId)
+    }
+
+    class AuctionRepository {
+        +findByListingId(listingId)
+    }
+
+    class BidRepository {
+        +countByAuctionId(auctionId)
+    }
+
+    class ListingResponse {
+        UUID id
+        String title
+        BigDecimal price
+        ListingCategory category
+        UUID sellerId
+        UUID auctionId
+        boolean hasBids
+    }
+
+    class ListingDetailResponse {
+        UUID id
+        String description
+        BigDecimal startingPrice
+        BigDecimal reservePrice
+        Long durationMinutes
+        Instant endsAt
+    }
+
+    class ListingCategoryNodeResponse {
+        ListingCategory key
+        String label
+        String pathLabel
+        List children
+    }
+
+    ListingQueryController --> ListingQueryService : delegates queries
+    ListingQueryService --> ListingRepository : filters active listings
+    ListingQueryService --> AuctionRepository : enriches auction metadata
+    ListingQueryService --> BidRepository : counts bids
+    ListingQueryService --> ListingResponse : maps summary
+    ListingQueryService --> ListingDetailResponse : maps detail
+    ListingQueryService --> ListingCategoryNodeResponse : builds category tree
+```
+
+### Code Diagram 3 - Category Hierarchy
+```mermaid
+classDiagram
+    class ListingCategory {
+        <<enumeration>>
+        ELECTRONICS
+        ELECTRONICS_PHONE
+        ELECTRONICS_SMARTPHONE
+        ELECTRONICS_LAPTOP
+        FASHION
+        BOOKS
+        HOME_LIVING
+        BEAUTY
+        SPORTS
+        HOBBIES
+        OTHER
+        -ListingCategory parent
+        -String label
+        +parent()
+        +label()
+        +isRoot()
+        +isSameOrDescendantOf(category)
+        +pathLabel()
+        +pathSegments()
+        +children()
+    }
+
+    class ListingCategoryNodeResponse {
+        ListingCategory key
+        String label
+        String pathLabel
+        List children
+    }
+
+    class ListingQueryService {
+        +getCategoryTree()
+        -toCategoryNode(category)
+    }
+
+    class ListingService {
+        +getCategoryTree()
+        -toCategoryNode(category)
+        -resolveCategory(category)
+    }
+
+    ListingCategory --> ListingCategory : parent
+    ListingQueryService --> ListingCategory : reads enum tree
+    ListingService --> ListingCategory : resolves default category
+    ListingQueryService --> ListingCategoryNodeResponse : maps tree node
+    ListingService --> ListingCategoryNodeResponse : maps tree node
+```
+
+### Code Diagram 4 - Latest Price Projection
+```mermaid
+classDiagram
+    class AuctionService {
+        +placeBid(auctionId, request, bidderId)
+        -updateAuctionAfterBid(auction, bidAmount, bidReceivedAt)
+        -persistBid(context, now)
+    }
+
+    class InMemoryListingPriceUpdateQueue {
+        +publish(message)
+        +consumePendingUpdates()
+        +flushPendingUpdates()
+        +pendingCount()
+    }
+
+    class ListingPriceUpdateMessage {
+        UUID listingId
+        UUID auctionId
+        BigDecimal latestPrice
+        Instant submittedAt
+    }
+
+    class ListingService {
+        +updateDisplayedPrice(listingId, latestPrice)
+    }
+
+    class ListingRepository {
+        +findById(listingId)
+        +save(listing)
+    }
+
+    class Listing {
+        UUID id
+        BigDecimal price
+        Instant updatedAt
+    }
+
+    AuctionService --> ListingPriceUpdateMessage : creates after accepted bid
+    AuctionService --> InMemoryListingPriceUpdateQueue : publishes message
+    InMemoryListingPriceUpdateQueue --> ListingService : consumes asynchronously
+    ListingService --> ListingRepository : loads and saves listing
+    ListingRepository --> Listing : updates displayed price
+```
