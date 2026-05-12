@@ -812,9 +812,9 @@ flowchart LR
         DTO[Listing DTO Mapper]
     end
 
-    GW -->|POST/PUT/DELETE /api/listings| LC
-    GW -->|POST /api/auctions| AC
-    BCS -->|GET /api/listings/{id}/validation| LC
+    GW -->|"POST/PUT/DELETE /api/listings"| LC
+    GW -->|"POST /api/auctions"| AC
+    BCS -->|"GET /api/listings/{id}/validation"| LC
 
     LC --> LS
     AC --> AS
