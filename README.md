@@ -636,13 +636,6 @@ classDiagram
     TransactionRepository --> WalletTransaction
 ```
 
-Diagram ini menunjukkan struktur utama kode Wallet Service. `WalletController` menjadi REST API layer yang menerima request dari Gateway atau service lain. Controller tidak menyimpan business logic utama, tetapi meneruskan request ke `WalletService`.
-
-`WalletService` menjadi pusat business logic. Di dalam service ini terdapat proses untuk melihat saldo, top-up, withdraw, hold fund, release hold, capture hold, dan mengambil riwayat transaksi. Service ini juga menggunakan `idempotencyCache` untuk menghindari pemrosesan command yang sama secara berulang, terutama pada operasi hold, release, dan capture.
-
-Repository layer digunakan untuk memisahkan akses data dari business logic. `WalletRepository` digunakan untuk mengambil atau membuat data wallet berdasarkan `userId`. `HoldRepository` digunakan untuk menyimpan dan mencari data dana yang sedang ditahan. `TransactionRepository` digunakan untuk mencatat dan mengambil riwayat transaksi wallet.
-
-Model utama dalam service ini adalah `Wallet`, `HoldRecord`, dan `WalletTransaction`. `Wallet` menyimpan saldo tersedia dan saldo tertahan. `HoldRecord` menyimpan status dana yang ditahan, seperti `HELD`, `RELEASED`, atau `CAPTURED`. `WalletTransaction` menyimpan jejak transaksi agar perubahan saldo dapat diaudit.
 
 ---
 
@@ -680,14 +673,6 @@ sequenceDiagram
         Controller-->>Bidding: HoldResponse
     end
 ```
-
-Diagram ini menjelaskan alur ketika Bidding Command Service meminta Wallet Service untuk menahan dana user saat user melakukan bid. Request masuk ke `WalletController`, lalu diteruskan ke `WalletService`.
-
-Pada tahap awal, `WalletService` mengecek apakah `idempotencyKey` sudah pernah diproses. Jika key yang sama sudah ada, service langsung mengembalikan hasil lama. Tujuannya adalah mencegah dana user tertahan dua kali ketika request yang sama dikirim ulang karena retry jaringan.
-
-Jika request merupakan request baru, service mengambil wallet user melalui `WalletRepository`, lalu memvalidasi apakah `availableBalance` cukup. Jika saldo cukup, method `wallet.hold(amount)` dijalankan. Operasi ini mengurangi `availableBalance` dan menambah `heldBalance`.
-
-Setelah itu, service membuat `HoldRecord`, mencatat transaksi bertipe `HOLD`, lalu menyimpan hasilnya ke idempotency cache. Alur ini penting karena proses bidding tidak boleh hanya mengecek saldo, tetapi juga harus memastikan dana benar-benar ditahan agar user tidak menggunakan saldo yang sama untuk transaksi lain.
 
 ---
 
